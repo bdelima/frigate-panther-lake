@@ -14,12 +14,10 @@ name: Build and publish Panther Lake Frigate image
 #   gh secret set DOCKERHUB_TOKEN    --env release --repo bdelima/frigate-panther-lake
 
 on:
-  # SCHEDULE DISABLED UNTIL CUTOVER. The old fork (bdelima/frigate) still
-  # publishes the same Docker Hub tags on a daily timer; enabling this at the
-  # same time would have two pipelines racing to publish. Uncomment once a
-  # manual run here has been verified and the old fork's schedule is off.
-  # schedule:
-  #   - cron: "0 6 * * *"
+  schedule:
+    # Daily at 06:00 UTC: picks up new stable upstream Frigate releases.
+    # (If it is already published, the run is a cheap no-op.)
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       tag:
