@@ -1,0 +1,150 @@
+name: Build and publish Panther Lake Frigate image
+
+# Builds an unofficial Frigate image with Intel Panther Lake NPU support for
+# the latest stable upstream Frigate release (or a tag you pick), and
+# publishes it to Docker Hub as bdelima/frigate-panther-lake.
+#
+# The job runs in the `release` Environment, which is restricted to the main
+# branch and holds the Docker Hub secrets, so a workflow run from any other
+# branch can never read them. It has no required reviewer on purpose: the
+# daily build is meant to run unattended.
+#
+# One-time setup (done by the user, never by a session):
+#   gh secret set DOCKERHUB_USERNAME --env release --repo bdelima/frigate-panther-lake
+#   gh secret set DOCKERHUB_TOKEN    --env release --repo bdelima/frigate-panther-lake
+
+on:
+  # SCHEDULE DISABLED UNTIL CUTOVER. The old fork (bdelima/frigate) still
+  # publishes the same Docker Hub tags on a daily timer; enabling this at the
+  # same time would have two pipelines racing to publish. Uncomment once a
+  # manual run here has been verified and the old fork's schedule is off.
+  # schedule:
+  #   - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream Frigate tag to build (e.g. v0.18.1). Leave blank to auto-pick the latest stable release."
+        required: false
+        default: ""
+      force:
+        description: "Rebuild and republish even if this version is already on Docker Hub (e.g. after a scripts/build.sh fix)."
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Build only: do not push to Docker Hub or create a GitHub Release."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write   # only used to create the GitHub Release
+    steps:
+      - name: Free up disk space
+        # Frigate's build is large; the default runner's ~14GB free is tight.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Determine target tag
+        id: pick_tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
+          else
+            # Stable releases only (vX.Y.Z; no -rc/-beta), highest version wins.
+            TAG=$(git ls-remote --tags --refs https://github.com/blakeblackshear/frigate.git 'v[0-9]*' \
+              | sed 's|.*refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          fi
+          [[ -n "$TAG" ]] || { echo "::error::Could not determine a target tag"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Target tag: $TAG"
+
+      - name: Check whether this version is already published
+        id: check_published
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          if [[ "$FORCE" == "true" ]]; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "force=true: rebuilding regardless of what's on Docker Hub."
+            exit 0
+          fi
+          VERSION="${{ steps.pick_tag.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://hub.docker.com/v2/repositories/bdelima/frigate-panther-lake/tags/${VERSION}")
+          if [[ "$STATUS" == "200" ]]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "${VERSION} already exists on Docker Hub: nothing to do."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check_published.outputs.already_published == 'false'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build (clone upstream, patch, make local)
+        if: steps.check_published.outputs.already_published == 'false'
+        run: |
+          chmod +x scripts/build.sh
+          scripts/build.sh "${{ steps.pick_tag.outputs.tag }}"
+
+      - name: Log in to Docker Hub
+        if: steps.check_published.outputs.already_published == 'false' && github.event.inputs.dry_run != 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push to Docker Hub
+        if: steps.check_published.outputs.already_published == 'false' && github.event.inputs.dry_run != 'true'
+        run: |
+          docker tag "${IMAGE_TAG}" "bdelima/frigate-panther-lake:${VERSION}"
+          docker tag "${IMAGE_TAG}" "bdelima/frigate-panther-lake:latest"
+          docker push "bdelima/frigate-panther-lake:${VERSION}"
+          docker push "bdelima/frigate-panther-lake:latest"
+
+      - name: Create GitHub Release
+        if: steps.check_published.outputs.already_published == 'false' && github.event.inputs.dry_run != 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: "${{ env.VERSION }}"
+          name: "Panther Lake build - ${{ env.VERSION }}"
+          generate_release_notes: false
+          body: |
+            Unofficial Frigate build with Intel Panther Lake NPU support, built
+            from upstream ${{ steps.pick_tag.outputs.tag }} with NPU driver and
+            iHD media driver version patches applied (see scripts/build.sh for
+            the exact versions baked in).
+
+            Docker Hub: `bdelima/frigate-panther-lake:${{ env.VERSION }}`
+
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "### Panther Lake Frigate build"
+            echo "- Target tag: \`${{ steps.pick_tag.outputs.tag }}\`"
+            if [[ "${{ steps.check_published.outputs.already_published }}" == "true" ]]; then
+              echo "- Result: already published, skipped"
+            elif [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+              echo "- Result: dry run, built but not published"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

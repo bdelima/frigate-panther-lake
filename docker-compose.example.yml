@@ -1,0 +1,24 @@
+services:
+  frigate:
+    image: bdelima/frigate-panther-lake:latest   # or pin to a version, e.g. :0.18.1
+    container_name: frigate
+    restart: unless-stopped
+    # Everything below this line is standard Frigate configuration —
+    # unchanged from any other Frigate deployment. Adjust devices/volumes/
+    # ports to match your actual setup; this is illustrative, not a
+    # drop-in replacement for your real compose file.
+    shm_size: "512mb"
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/accel:/dev/accel   # NPU device node
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config:/config
+      - ./storage:/media/frigate
+    ports:
+      - "5000:5000"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    environment:
+      TZ: "America/New_York"
