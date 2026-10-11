@@ -54,8 +54,8 @@ LEVEL_ZERO_DEB_URL="https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-g
 
 # iHD media driver and gmmlib: bumped only when upstream still carries the OLD
 # values; if upstream has moved on, the bump is skipped with a warning.
-NEW_MEDIA_DRIVER_VERSION="intel-media-26.2.4"
-NEW_GMMLIB_VERSION="intel-gmmlib-22.10.0"
+NEW_MEDIA_DRIVER_VERSION="intel-media-26.3.5"
+NEW_GMMLIB_VERSION="intel-gmmlib-22.10.2"
 OLD_MEDIA_DRIVER_VERSION="intel-media-25.2.6"
 OLD_GMMLIB_VERSION="intel-gmmlib-22.7.2"
 
