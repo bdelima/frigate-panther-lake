@@ -124,6 +124,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: "${{ env.VERSION }}"
+          target_commitish: ${{ github.sha }}
           name: "Panther Lake build - ${{ env.VERSION }}"
           generate_release_notes: false
           body: |
